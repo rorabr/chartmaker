@@ -1,0 +1,619 @@
+#!/usr/bin/perl
+
+# Plot simpple quick and dirty charts using Chart::type CPAN perl libraries - RORA - 2020-09-18
+# 
+# MIT License
+# 
+# Copyright (c) 2020 Rodrigo Antunes
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+use Getopt::Long;
+use Data::Dumper;
+use Pod::Usage;
+use IO::File;
+use JSON;
+use Module::Load::Conditional qw(can_load check_install requires);
+use strict;
+
+# defaults
+my %args_defaults=(
+      geometry => "1920x1080",          # chart size WxH
+      width => 1920,                    # chart width in pixels
+      height => 1080,
+      delimiter => ",",                 # number delimiter in text input
+      output => "",                     # specify output file, if "" generate other filename
+      format => "png",                  # output format (png or jpg)
+      type => "Lines",                  # chart type: lines, points, bars, pie
+      data => "",                       # data to plot
+      help => 0,
+      verbose => 0,
+      args_file => $ENV{HOME} . "/.chartmaker",
+      _opt => { transparent => 0,
+                png_border => 10,
+                graph_border => 10,
+                text_space => 2,
+                title => "",
+                sub_title => "",
+                x_label => "",
+                y_label => "",
+                y_label2 => "",
+                legend => "right",                # top, bottom, right, left, none
+                tick_len => 4,
+                x_ticks => "normal",
+                xy_plot => 0,
+                min_y_ticks => 2,
+                max_y_ticks => 100,
+                min_x_ticks => 2,
+                max_x_ticks => 100,
+                integer_ticks_only => 0,
+                skip_int_ticks => 1,
+                precision => 3,
+                max_val => undef,
+                min_val => undef,
+                include_zero => 0,
+                pt_size => 18,
+                brush_size => 4,
+                brushStyle => "FilledCircle",
+                skip_x_ticks => undef,
+                skip_y_ticks => 1,
+                grey_background => 1,
+                y_axes => "left",
+                x_grid_lines => 0,
+                y_grid_lines => 0,
+                grid_lines => 0,
+                space_bars => 1,
+                sort => 0,
+                ylabel2 => undef,
+                label_values => "value",         # percent, value, both, none
+                start => undef,
+                interval => undef,
+                interval_ticks => 5,
+                point => 1,
+                line => 0,
+                arrow => 0,
+                angle_interval => 30,
+                min_circles => 4,
+                max_circles => 100,
+      }
+    );
+my $seriesname = "[a-zA-Z][a-zA-Z0-9_]*";
+# read JSON config file, if available
+if (-f $args_defaults{args_file} && -r $args_defaults{args_file}) {
+  my $h = decode_json(`cat $args_defaults{args_file}`);
+  for my $k (keys %{$h}) {
+    $args_defaults{$k} = $h->{$k} if (exists $args_defaults{$k});
+  }
+}
+my $self=bless({%args_defaults}, __PACKAGE__);
+die("invalid format (png or jpg)") if ($self->{format} ne "png" && $self->{format} ne "jpg");
+die("invalid type (Lines, LinesPoints, Points, Bars or Pie)") if ($self->{type} ne "Lines" && $self->{type} ne "LinesPoints" && $self->{type} ne "Points" && $self->{type} ne "Bars" && $self->{type} ne "Pie");
+$self->run;
+
+# Parse the command line interpreting each options/command
+sub run {
+  my $argv = join(" ", @ARGV);
+  while ($argv ne "") {
+    if ($argv =~ /^\s*(-g|--geometry)(\s+|=)(\d+)x(\d+)\b\s*(.*)/) {
+      $self->{geometry} = "$3x$4";
+      $self->{width} = $3;
+      $self->{height} = $4;
+      $argv = $5;
+      print "geometry set to $self->{geometry}\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-x|--width)(\s+|=)(\d+)\b\s*(.*)/) {
+      $self->{width} = $3;
+      $self->{geometry} = $self->{width} . "x" . $self->{height};
+      $argv = $4;
+      print "width set to $self->{width}\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-y|--height)(\s+|=)(\d+)\b\s*(.*)/) {
+      $self->{height} = $3;
+      $self->{geometry} = $self->{width} . "x" . $self->{height};
+      $argv = $4;
+      print "height set to $self->{height}\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-t|--type)(\s+|=)(Lines|LinesPoints|Points|Bars|Pie)\b\s*(.*)/) {
+      $self->{type} = $3;
+      $argv = $4;
+      print "chart type set to $self->{type}\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-d|--delimiter)(\s+|=)([a-zA-Z_\.,;\|\#\!\$\%\&\*\-=\+]+|{cr}|{space})\s*(.*)/) {
+      $self->{delimiter} = $3 eq "{cr}" ? "\n" : ($3 eq "{space}" ? " " : $3);
+      $argv = $4;
+      print "delimiter set to " . ($self->{delimiter} eq "\n" ? "{cr}" : "\"$self->{delimiter}\"") . "\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-f|--format)(\s+|=)(png|jpg)\b\s*(.*)/) {
+      $self->{format} = $3;
+      $argv = $4;
+      print "output file format set to \"$self->{format}\"\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-o|--output)(\s+|=)([^\s]+)\s*(.*)/) {
+      $self->{output} = $3;
+      $argv = $4;
+      print "output file name set to \"$self->{output}\"\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*($seriesname)(\(([^\)]+)\))?=\@($seriesname)\s+(.*)/) {
+      $self->{series}->{$1} = $self->{series}->{$4};
+      $self->{series}->{$1}->{title} = $3 if (defined $3);
+      print "series $4 copied to series $1\n" if ($self->{verbose});
+      $argv = $5;
+    } elsif ($argv =~ /^\s*(\+($seriesname))(\s+|=)(-?[0-9]+(\.[0-9]+)?|\"[^\"]+\")\s*(.*)/) {
+      if (exists $self->{_opt}->{$2}) {
+        my($name, $val) = ($2, $4);
+        $argv = $6;
+        $self->{_opt}->{$name} = ($val =~ /^"([^"]+)"$/ ? $1 : $val);
+        print "chart option $name set to $val\n" if ($self->{verbose});
+      } else {
+        die("$0 error: unknown chart options \"$2\"");
+      }
+    } elsif ($argv =~ /^\s*($seriesname)(\(([^\)]+)\))?=([^\s]+)\s*(.*)/) {
+      my $name = $1;
+      my $title = $3 ? $3 : $name;
+      $self->readseries($name, $title, $4);
+      $argv = $5;
+    } elsif ($argv =~ /^\s*($seriesname)=\s+(.*)/) {
+      delete($self->{series}->{$1});
+      print "series $1 deleted\n" if ($self->{verbose});
+      $argv = $2;
+    } elsif ($argv =~ /^\s*plot\(($seriesname|($seriesname,)+$seriesname)\)\s*(.*)/) {
+      $self->plot($1);
+      $argv = $3;
+    } elsif ($argv =~ /^\s*(-v|--verbose)\b\s*(.*)/) {
+      $self->{verbose} ++;
+      $argv = $2;
+      print "verbose set to $self->{verbose}\n" if ($self->{verbose});
+    } elsif ($argv =~ /^\s*(-h|--help)\b\s*(.*)/) {
+      pod2usage(-exitval=>1, -verbose=>1);
+      $argv = $2;
+    } else {
+      die("$0 syntax error at: $argv");
+    }
+  }
+}
+
+# Parse/process a new series and add it to the list
+sub readseries {
+  my($self, $name, $title, $def)=@_;
+  my $number = "\-?[0-9]+(\.[0-9]+)?(e\-?[0-9]+)?";
+  my $cell = "[a-zA-Z]+[0-9]+";
+  my $delim = $self->{delimiter};
+  if ($def =~ /^file\("([^\"]+)"\)$/) {
+    my $opt = { delimiter => "\n" };
+    my $f = $1;
+    if (-e "$f" && -f "$f" && -r "$f") {
+      my $h = IO::File->new($f, "r") || die("$0 series definition error: reading from file \"$f\": $!");
+      my $buf;
+      $h->sysread($buf, -s "$f");
+      $h->close;
+      $self->addseries($name, $title, [split(/$delim/, $buf)]);
+    } else {
+      die("$0 series definition error: file \"$f\" not found or not readable");
+    }
+  } elsif ($def =~ /^calc\("([^\"]+)",(r|c|rows|cols),(([a-~\@-Z0-9!-\)+-\.:->_]+)')?($cell):($cell)(,(title|notitle))?\)$/) {
+    $self->readcalc($name, $1, ($2 eq "r" || $2 eq "rows"), $4, $5, $6, $8);
+  } elsif ($def =~ /^fixed\("([^\"]+)",(r|c|rows|cols),($cell):($cell)(,(.*))?\)$/) {
+    $self->readfixed($name, $1, ($2 eq "r" || $2 eq "rows"), $3, $4, $6);
+  } elsif ($def =~ /^json\("([^\"]+)",(.*)\)/) {
+    if (! defined $self->{json}->{"$1"}) {
+      my $h = IO::File->new($1, "r") || die("$0 series definition error: reading from json \"$1\": $!");
+      my $buf;
+      $h->sysread($buf, -s "$1");
+      $h->close;
+      $self->{json}->{"$1"} = decode_json($buf);
+    }
+    if ((my $loop = index($2, "[]")) == -1) {
+      $self->addseries($name, $title, eval "\$self->{json}->{\"$1\"}->$2");
+    } else {
+      $loop ++;
+      my $i = 0;
+      my $v;
+      my $data = [];
+      do {
+        my $path = substr($2, 0, $loop) . ($i) . substr($2, $loop);
+        $v = eval "\$self->{json}->{\"$1\"}->$path";
+        push @{$data}, ($v) if (defined $v);
+        $i ++;
+      } while (defined $v);
+      $self->addseries($name, $title, $data);
+    }
+  } elsif ($def =~ /^stdin/) {
+    $self->addseries($name, $title, [split(/$delim/, join("\n", <STDIN>))]);
+  } elsif ($def =~ /^log\(($seriesname)\)/) {
+    die("$0 series log error: base series \"$1\" does not exist") if (! defined $self->{series}->{$1});
+    my $data = [];
+    for my $v (@{$self->{series}->{$1}->{data}}) {
+      push @{$data}, ($v <= 0 ? 0 : log($v));
+    }
+    $self->addseries($name, $title, $data);
+  } elsif ($def =~ /^histogram\(($seriesname),(\d+)\)/) {
+    die("$0 series histogram error: base series \"$1\" does not exist") if (! defined $self->{series}->{$1});
+    my $max = $self->{series}->{$1}->{data}->[0];
+    for my $v (@{$self->{series}->{$1}->{data}}) {
+      $max = $v if ($v > $max);
+    }
+    my $interval = ($max + 1) / $2;
+    my $data = [];
+    for my $v (@{$self->{series}->{$1}->{data}}) {
+      $data->[$v / $interval] ++;
+    }
+    $self->addseries($name, $title, $data);
+    my $xs = [];
+    for (my $i = 0; $i < $2; $i ++) {
+      $xs->[$i] = ($i + 1) * $interval;
+    }
+    $self->addseries($name . "_x", $name . "_x", $xs);
+  } elsif ($name eq "x" && $def =~ /^([^$delim]+|([^$delim]+$delim)+[^$delim]+)$/) {
+    $self->addseries($name, $title, [split(/$delim/, $def)]);
+  } elsif ($name ne "x" && $def =~ /^(${number}|(${number}${delim})+${number})$/) {
+    $self->addseries($name, $title, [split(/$delim/, $def)]);
+  } else {
+    die("$0 series definition syntax error at: $def");
+  }
+}
+
+# Read series from a calc spreadsheet file
+sub readcalc {
+  my($self, $root, $f, $rows, $sheetname, $cell1, $cell2, $opt)=@_;
+  can_load(modules => {"Spreadsheet::Read" => "0.69"}, autoload => 1) || die("$0 error: module Spreadsheet::Read not installed");
+  my($book, $sheetno) = (0, 1);
+  if ($f =~ /^stdin:(xls|ods|csv|sxc)$/) {
+    my $h = IO::Handle->new();
+    $h->fdopen(fileno(STDIN), "r") || die("$0 error: redireting from stdin $!");
+    $book = ReadData($h, parser => $1, sep => $self->{delimiter});
+    $h->close;
+  } else {
+    $book = ReadData($f);
+  }
+  die("$0 error: reading calc spreadsheet from \"$f\"") if (! defined $book);
+  if (defined $sheetname) {
+    die("$0 error: calc spreadsheet \"$f\" does not contain a sheet named \"$sheetname\"") if (! defined $book->[0]{sheet}->{$sheetname});
+    $sheetno = $book->[0]{sheet}->{$sheetname};
+  }
+  my $sheet = $book->[$sheetno];
+  if (! defined $sheet->{$cell1} || ! defined $sheet->{$cell2}) {
+    die("$0 error: calc spreadsheet \"$f\" does not contain cell $cell1 n/or $cell2");
+  }
+  my $title = ($opt ne "notitle");
+  my($col1, $row1) = &cell2pos($cell1);
+  my($col2, $row2) = &cell2pos($cell2);
+  die("$0 error: calc spreadsheet \"$f\" out of range cell $cell2") if ($col2 > $sheet->{maxcol} || $row2 > $sheet->{maxrow});
+  for (my $i = ($rows ? $row1 : $col1); $i <= ($rows ? $row2 : $col2); $i ++) {
+    my($data, $name) = ([], "");
+    $name = $i - ($rows ? $row1 : $col1) + 1 if (! $title);
+    for (my $j = ($rows ? $col1: $row1); $j <= ($rows ? $col2 : $row2); $j ++) {
+      my $v = $sheet->{cell}->[$rows ? $j : $i]->[$rows ? $i : $j];
+      if ($name) {
+        if ($name ne "x") {
+          push @{$data}, ($v);
+        } else {
+          push @{$data}, $sheet->{&pos2cell($j, $i)};
+        }
+      } else {
+        $name = $v;
+      }
+    }
+    $name =~ s/[^a-zA-Z0-9_]//gs;
+    $self->addseries($name eq "x" ? $name : "${root}_$name", $name, $data);
+  }
+}
+
+# Read fixed sized columns text file
+sub readfixed {
+  my($self, $root, $f, $rows, $cell1, $cell2, $opt)=@_;
+  my($h, $buf, $title, $raw);
+  my @size = split(/,/, $opt);
+  if ($size[0] eq "title" || $size[0] eq "notitle") {
+    $title = ($size[0] eq "title");
+    shift @size;
+  }
+  if ($f eq "stdin") {
+    $h = IO::Handle->new();
+    $h->fdopen(fileno(STDIN), "r") || die("$0 error: redireting from stdin $!");
+  } else {
+    $h = IO::File->new($f, "r") || die("$0 error: reading file from \"$f\"");
+  }
+  my $row = 1;
+  while (my $line = $h->getline) {
+    my($col, $pos) = (1, 0);
+    for my $w (@size) {
+      $raw->[$row][$col ++] = &trim(substr($line, $pos, $w));
+      $pos += $w;
+    }
+    $row ++;
+  }
+  $h->close;
+  my($col1, $row1) = &cell2pos($cell1);
+  my($col2, $row2) = &cell2pos($cell2);
+  die("$0 error: fixed col file \"$f\" out of range cell $cell2") if ($col2 > ($#size + 1) || $row2 > ($#{$raw} + 1));
+  for (my $i = ($rows ? $row1 : $col1); $i <= ($rows ? $row2 : $col2); $i ++) {
+    my($data, $name) = ([], "");
+    $name = $i - ($rows ? $row1 : $col1) + 1 if (! $title);
+    for (my $j = ($rows ? $col1: $row1); $j <= ($rows ? $col2 : $row2); $j ++) {
+      my $v = $raw->[$rows ? $i : $j][$rows ? $j : $i];
+      if ($name) {
+        push @{$data}, ($v);
+      } else {
+        $name = $v;
+      }
+    }
+    $self->addseries($name eq "x" ? $name : "${root}_$name", $name, $data);
+  }
+}
+
+# Convert cell to row, column (1 based)
+sub cell2pos {
+  my($col, $row) = @_[0] =~ /^([a-zA-Z]+)(\d+)$/;
+  my $n=0; map {$n = $n * 26 + (ord($_) - 64)} split(//, $col);
+  return($n, $row);
+}
+
+sub pos2cell {
+  my($x, $y)=@_;
+  my $col = "";
+  while ($x) {
+    $col = $col . chr($x % 26 + 64);
+    $x = int($x / 26);
+  }
+  return("$col$y");
+}
+
+# Add a new series
+sub addseries {
+  my($self, $name, $title, $series)=@_;
+  die("$0 series error: no data points in \"$name\"") if ($#{$series} == -1);
+  $self->{series}->{$name} = {title => $title, data => $series};
+  print "chart series $name, title \"$title\" loaded with " . ($#{$self->{series}->{$name}->{data}} + 1) . " values\n" if ($self->{verbose});
+}
+
+# Plot the chart
+sub plot {
+  my($self, $slist)=@_;
+  my $chartmodule = "Chart::" . $self->{type};
+  can_load(modules => {$chartmodule => "2.4.10"}) || die("$0 error: module $chartmodule not installed");
+  my $f = $self->{output} || "chartmaker.png";
+  my $h;
+  if ($f eq "-") {
+    $h = IO::Handle->new();
+    $h->fdopen(fileno(STDOUT),"w") || die("$0 error: redireting to stdout: $!");
+  } else {
+    if ($f !~ /\.png$/ && $f !~ /\.jpg$/) {
+      $f .= "." . $self->{format};
+    }
+    $h = IO::File->new($f, "w") || die("$0 error: writting to file \"$f\": $!");
+  }
+  my $data = $self->{_opt}->{xy_plot} ? [] : [ [] ];
+  my $xmax = 0;
+  my $labels = $self->{_opt}->{xy_plot} ? [ "" ] : [];
+  for my $sname (split(/,/, $slist)) {
+    if (defined $self->{series}->{$sname}) {
+      push @{$data}, ($self->{series}->{$sname}->{data});
+      if (! $self->{_opt}->{xy_plot}) {
+        push @{$labels}, ($self->{series}->{$sname}->{title});
+      } else {
+        $labels->[0] .= ($labels->[0] eq "" ? "" : " x ") . ($self->{series}->{$sname}->{title});
+      }
+      if ($#{$self->{series}->{$sname}->{data}} > $xmax) {
+        $xmax = $#{$self->{series}->{$sname}->{data}};
+      }
+    } else {
+      die("$0 error: series \"$sname\" not found during plot");
+    }
+  }
+  if (! $self->{_opt}->{xy_plot}) {
+    if (defined $self->{series}->{x}) {
+      $data->[0] = $self->{series}->{x}->{data};
+    } else {
+      $data->[0] = [(1 .. $xmax + 1)];
+    }
+  }
+  my $chart = "$chartmodule"->new($self->{width}, $self->{height});
+  $chart->set(%{$self->{_opt}});
+  $chart->set("legend_labels" => $labels);
+  if ($self->{format} eq "png") {
+    $chart->png($h, $data);
+  } else {
+    $chart->jpeg($h, $data);
+  }
+  $h->close;
+  print "chart written to " . ($f eq "-" ? "stdout" : "\"$f\"") . "\n" if ($self->{verbose});
+}
+
+sub trim {
+  my($s)=@_;
+  $s =~ s/^\s+//g;
+  return($s);
+}
+
+__END__
+
+=head1 NAME
+
+chartmaker - use perl modules Chart::type to plot charts using data read from the command line, file or stdin
+
+=head1 SYNOPSIS
+
+  chartmaker [--geometry|g=WxH] [--width|x=W] [--height|y=H] [--output|o=file]
+    [--format|f=png|jpg] [--delimiter|d=D] [--help|h] [--verbose|v]
+    +option=value ... command ... 
+
+  Examples and documentation available at https://github.com/rorabr/chartmaker
+
+=head1 OPTIONS
+
+  Options and commands can be used more than once to change parameters for
+  reading file or plotting charts. Multiple files can be read in a single
+  run and multiple charts can be written as well. All commands and names
+  are case sensitive. When creating multiple charts in the same command one
+  must remember that the series (specially x) still exists between charts.
+
+  Options can have equal sign or space separating the value.
+
+  --geometry WxH
+  -g=WxH
+      Specify the chart resolution in pixels. Geometry is width x height,
+      example: 1280x720. Default is 1920x1080.
+  
+  --width W
+  -x=W
+      Set only the chart's width, default is 1920.
+
+  --height H
+  -y=H
+      Set only the chart's height, default is 1080.
+
+  --delimiter D
+  -d=D
+      Set the dataset delimiter. Default is a comma (,). Can be a
+      single char or a string. The string {cr} specified a newline (\n).
+
+  --output file
+  -o=file
+      Set the output file. If the extension is not specified, .png or
+      .jpg will be added according to the file type. Default is
+      chartmaker.png. If the output file is "-", the chart will be
+      written to stdout (can be redirected to a file).
+
+  --format png|jpg
+  -f=jpg|png
+      Set the output file format to png or jpg. Default is png that
+      will produce a smaller lossless compression image.
+
+  --help
+  -h
+      Show this help.
+
+  --verbose
+  -v
+      Increase verbosity level. Essential to debug errors.
+
+  +option=value
+      Set a Chart::type option value like title, max and min values, etc.
+      Numeric values don't need quotes, but string values have to be quoted
+      like "title".
+
+      Check the Chart::type perl documentation for complete information.
+      https://metacpan.org/pod/distribution/Chart/Chart.pod
+
+  command
+      The following commands can be used in chartmaker:
+
+  name[(title)]=values
+      Define a new series named name, with the title title and values
+      values. The title is optional. If not informed, the title will
+      be the name. The values should be separated by the delimiter.
+      Numbers can be integers or floats. If a series is redefined the
+      last definition will be used. The series will be refered in the
+      plot command by the "name". The x series, used to specify the x
+      labels in the chart can accept strings besides numbers.
+
+  name[(title)]=stdin
+      Define a new series reading values from stdin.
+
+  name[(title)]=read("file")
+      Define a new series reading values from the text file "file".
+      The last delimiter will be used to parse the numbers.
+
+  name[(title)]=calc("file",rows|cols,Sheet'An:Bm)
+      Define a group of series called name_title read from the
+      spreadsheet file. File could be openoffice, csv or excel. Rows
+      indicate that series are horizontal, cols indicate that series are
+      vertical. The coordinates indicate the cells containing values.
+      If a series is called "x", the prefix is not added and it
+      becomes the X series, otherwise the series name will be
+      name_title. The sheet name is optional. Title and notitle
+      specifies if the series name is present in the first column/row.
+      If not, series name will be name_1, name_2, etc.
+
+  name[(title)]=fixed("file",rows|cols,An:Bm,title|notitle,size,...)
+      Define e group of series called name_title read from the fixed
+      column text file "file". rows indicate that series are
+      horizontal, cols indicate that series are vertical. The
+      coordinates indicate the cells containing values. Size are the
+      size of each column in chars starting at the first char. There
+      are no delimiters. Title and notitle specifies if the series
+      name is present in the first column/row. If not, series name
+      will be name\_1, name\_2, etc.
+
+  name[(title)]=log(series)
+      Define a new series by calculating decimal logarythm of all
+      positive values of the series. Zero and negatives remain 0.
+
+  name[(title)]=histogram(series,buckets)
+      Define a new series by calculating it's histogram using buckets
+      number of buckets.
+
+  plot(series list)
+      Plot a chart and write the image to the output file (or stdout,
+      if the output filename is "-"). All series should be specified
+      in the desired order by their name in a list separated by
+      commas.  The X labels will be read from a series called "x"
+      and does not have to included in the list. If the "x" series
+      is not defined, the labels will be integer numbers starting
+      from 1.
+
+=head1 CONFIG FILE
+
+  Chartmaker will try to read a JSON file from ~/.chartmaker and parse it as
+  default options. Example config file:
+
+  {"width":1280, "height":720}
+
+=head1 OPTIONS
+
+  The options settings starting with + are documented in the Chart::type CPAN
+  page: https://metacpan.org/pod/distribution/Chart/Chart.pod
+
+=head1 EXAMPLES
+
+chartmaker y(Torque)=1.1,2.2,3.3,4.6,7.8 --output=test.png plot(y)
+
+  Plot data from the command-line to test.png. The series name is Torque.
+
+uptime | perl -nae '($load) = $_ =~ /load average: (.*)/; print $load;' | ./chartmaker -g=512x320 --output=load --type=bars load=stdin x=5,10,15 +legend=\"none\" 'plot(load)'
+
+  Plot the system load using bars in a small sized chart to load.png
+
+./chartmaker -v --output=covid "covid=calc(\"example.xls\",rows,Countries'A1:H3)" +title=\"Covid19 in 2 Countries\" +precision=0 'plot(covid_brasil,covid_eua)' --output=milk --type=bars "milk=calc(\"example.xls\",cols,Milk'A1:D4)" +title=\"Milk in South America\" +precision=0 'plot(milk_1910,milk_1950,milk_1970)'
+
+  Plot two charts with data extracted from the example.xls spreadsheet (two
+  different sheets named Countries and Milk. 
+
+./chartmaker -v --output=json 'seq1(Sequence)=json("example.json",{sequence})' 'x=json("example.json",{x})'  'plot(seq1)'
+
+  Plot a chart read from a JSON file. Two sequence of numbers are read from the
+  JSON file, seq1 and x (which are the X labels). The file is parsed only once
+  and is cached in memory. The second argument is the perl code to fetch data
+  from a perl hash without the variable name, i.e. $VAR1->{sequence}, or
+  $VAR1->[0], etc.
+
+./chartmaker -t pie --output=webservers 'webservers(Web Servers Usage)=36.3,32.5,15.9,7.8,7.1,0.4' x=Apache,Nginx,Cloudflare,IIS,LiteSpeed,others 'plot(webservers)'
+
+  Plot a piechart with the most used webservers. Sometimes quoting is necesary
+  to avoid shell expansion.
+
+  Check out the examples directory for more detailed examples using some free
+  datasets downloaded from the internet.
+
+=head1 MOTIVATION
+
+  I know GNUplot exists. And it's the best ploting software there is. But every
+  time I want to plot something simple, to debug to just to visualize something,
+  I end up speding yours reading the GNUplot manual and checking examples on the
+  internet. That's why I wrote this.
+
+=head1 AUTHOR
+
+chartmaker was written by Rodrigo Antunes rorabr@github.com
+Chart::type perl modules was developed by David Bonner (dbonner@cs.bu.edu)
+
+=cut
