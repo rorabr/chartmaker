@@ -229,9 +229,9 @@ sub readseries {
   } elsif ($def =~ /^stdin/) {
     my $first = 1;
     my $buf = "";
-    while ((my $r = sysread(STDIN, $buf, 65536, length($buf)))) {
+    while ((my $r = sysread(STDIN, $buf, 16384, length($buf)))) {
       die("$0 series error: no delimiter read from stdin") if (index($buf, $delim) == -1);
-      my $p = ($r == 65536 ? rindex($buf, $delim) : $r);
+      my $p = rindex($buf, $delim);
       my @a = split(/$delim/, substr($buf, 0, $p));
       if ($first) {
         $self->addseries($name, $title, [@a]);
@@ -241,6 +241,7 @@ sub readseries {
       }
       $buf = substr($buf, $p + 1);
     }
+    push @{$self->{series}->{$name}->{data}}, (split(/$delim/, $buf));
   } elsif ($def =~ /^log\(($seriesname)\)/) {
     die("$0 series log error: base series \"$1\" does not exist") if (! defined $self->{series}->{$1});
     my $data = [];
