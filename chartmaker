@@ -227,7 +227,20 @@ sub readseries {
       $self->addseries($name, $title, $data);
     }
   } elsif ($def =~ /^stdin/) {
-    $self->addseries($name, $title, [split(/$delim/, join("\n", <STDIN>))]);
+    my $first = 1;
+    my $buf = "";
+    while ((my $r = sysread(STDIN, $buf, 65536, length($buf)))) {
+      die("$0 series error: no delimiter read from stdin") if (index($buf, $delim) == -1);
+      my $p = ($r == 65536 ? rindex($buf, $delim) : $r);
+      my @a = split(/$delim/, substr($buf, 0, $p));
+      if ($first) {
+        $self->addseries($name, $title, [@a]);
+        $first = 0;
+      } else {
+        push @{$self->{series}->{$name}->{data}}, (@a);
+      }
+      $buf = substr($buf, $p + 1);
+    }
   } elsif ($def =~ /^log\(($seriesname)\)/) {
     die("$0 series log error: base series \"$1\" does not exist") if (! defined $self->{series}->{$1});
     my $data = [];
